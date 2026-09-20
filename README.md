@@ -22,24 +22,19 @@ a run.
 
 ## Install
 
-`jazz plugin add` installs a **packed** plugin (a `catalog-entry.json` + digest-matched artifact),
-not the source tree. Clone this repo, pack it, then install the emitted install manifest. Install,
-trust, and enable are three separate steps — `add` never trusts or enables on its own:
+Install straight from GitHub — no clone, no build, no `git` or `bun` required. Install, trust, and
+enable are separate steps; `add` never trusts or enables on its own:
 
 ```sh
-git clone https://github.com/lvndry/jazz-plugin-warp
-cd jazz-plugin-warp
-bun install
-jazz plugin pack .            # emits plugin.mjs, its SHA-256, and catalog-entry.json; prints the paths
-
-jazz plugin add <printed catalog-entry.json path>   # verify + install (no trust, no enable)
-jazz plugin trust com.jazz.plugins.warp             # acknowledge OS-user code execution for this digest
+jazz plugin add lvndry/jazz-plugin-warp                # download + install (no trust, no enable)
+jazz plugin trust com.jazz.plugins.warp                # acknowledge OS-user code execution for this digest
 jazz plugin enable com.jazz.plugins.warp --agent <id-or-name>   # grant egress consent + enable for one agent
 ```
 
-`jazz plugin inspect com.jazz.plugins.warp` shows the digest, declarations, grants, and enablement.
-The authoring manifest is `jazz-plugin.json` (id `com.jazz.plugins.warp`, entry `src/index.ts`). This
-plugin declares no network destinations, tools, or secrets — only the two lifecycle hooks.
+Pin a version with `jazz plugin add lvndry/jazz-plugin-warp@v0.1.0`. `jazz plugin inspect
+com.jazz.plugins.warp` shows the digest, declarations, grants, and enablement. The manifest is
+`jazz-plugin.json` (id `com.jazz.plugins.warp`, entry `src/index.ts`); this plugin declares no
+network destinations, tools, or secrets — only the two lifecycle hooks.
 
 ## Develop
 
