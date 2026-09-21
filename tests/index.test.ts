@@ -9,7 +9,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import plugin, {
   notificationFor,
-  notify,
+  planNotification,
   structuredPayload,
   supportsStructuredWarp,
   warpEventName,
@@ -68,22 +68,6 @@ function underStructuredWarp(): void {
   process.env["WARP_CLIENT_VERSION"] = "v0.2026.09.01.00.00.stable_01";
 }
 
-/** Capture everything written to stdout while `run` executes. */
-function captureStdout(run: () => void): string[] {
-  const writes: string[] = [];
-  const original = process.stdout.write.bind(process.stdout);
-  process.stdout.write = ((chunk: unknown) => {
-    writes.push(String(chunk));
-    return true;
-  }) as typeof process.stdout.write;
-  try {
-    run();
-  } finally {
-    process.stdout.write = original;
-  }
-  return writes;
-}
-
 describe("notificationFor", () => {
   it("builds a task-complete notification from the run summary", () => {
     expect(notificationFor(event({ event: "run-complete", data: { summary: "  Shipped.  " } }))).toEqual({
@@ -140,43 +124,41 @@ describe("structuredPayload", () => {
   });
 });
 
-describe("notify", () => {
-  it("emits a tab-bound warp://cli-agent OSC sequence under structured Warp", () => {
+describe("planNotification", () => {
+  it("plans a tab-bound warp://cli-agent OSC sequence under structured Warp", () => {
     underStructuredWarp();
-    const writes = captureStdout(() =>
-      notify(event({ event: "run-complete", conversationId: "sess-9", data: { summary: "ok" } })),
+    const plan = planNotification(
+      event({ event: "run-complete", conversationId: "sess-9", data: { summary: "ok" } }),
     );
-    expect(writes).toHaveLength(1);
-    const sequence = writes[0] ?? "";
+    expect(plan.kind).toBe("warp");
+    const sequence = plan.kind === "warp" ? plan.sequence : "";
     expect(sequence.startsWith("\u001b]777;notify;warp://cli-agent;")).toBe(true);
     expect(sequence.endsWith("\u0007")).toBe(true);
     expect(sequence).toContain('"session_id":"sess-9"');
   });
 
-  it("emits a plain OSC notification under Warp without structured support", () => {
+  it("plans a plain OSC notification under Warp without structured support", () => {
     process.env["TERM_PROGRAM"] = "WarpTerminal";
-    const writes = captureStdout(() => notify(event({ event: "awaiting-input" })));
-    expect(writes[0]).toBe(
-      "\u001b]777;notify;Jazz — waiting for you;The agent is ready for your next message.\u0007",
-    );
+    expect(planNotification(event({ event: "awaiting-input" }))).toEqual({
+      kind: "warp",
+      sequence:
+        "\u001b]777;notify;Jazz — waiting for you;The agent is ready for your next message.\u0007",
+    });
   });
 
-  it("does not emit an OSC sequence off Warp", () => {
-    const writes = captureStdout(() =>
-      notify(event({ event: "run-complete", data: { summary: "ok" } })),
-    );
-    expect(writes).toHaveLength(0);
+  it("plans a desktop notification off Warp", () => {
+    const plan = planNotification(event({ event: "run-complete", data: { summary: "ok" } }));
+    expect(plan).toEqual({ kind: "desktop", title: "Jazz — task complete", body: "ok" });
   });
 
-  it("is silent under JAZZ_WARP_SILENT and for unannounced events", () => {
+  it("stays silent under JAZZ_WARP_SILENT and for unannounced events", () => {
     underStructuredWarp();
     process.env["JAZZ_WARP_SILENT"] = "1";
-    const writes = captureStdout(() => {
-      notify(event({ event: "run-complete", data: { summary: "ok" } }));
-      delete process.env["JAZZ_WARP_SILENT"];
-      notify(event({ event: "session-start" }));
+    expect(planNotification(event({ event: "run-complete", data: { summary: "ok" } }))).toEqual({
+      kind: "silent",
     });
-    expect(writes).toHaveLength(0);
+    delete process.env["JAZZ_WARP_SILENT"];
+    expect(planNotification(event({ event: "session-start" }))).toEqual({ kind: "silent" });
   });
 });
 

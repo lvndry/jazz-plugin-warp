@@ -12,6 +12,7 @@
  */
 
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
 import type { JazzPluginModule, LifecycleEvent, LifecycleEventId } from "@jazz/plugin-sdk";
 
 export interface Notification {
@@ -116,10 +117,56 @@ export function structuredPayload(event: LifecycleEvent, warpEvent: "stop" | "no
   return JSON.stringify(payload);
 }
 
-/** Write an OSC 777 notification to the terminal's own stream, binding it to this tab. */
-function emitTerminalNotification(title: string, body: string): void {
+/** What the plugin will do for a lifecycle event, decided purely from the event and environment. */
+export type NotificationPlan =
+  | { readonly kind: "silent" }
+  | { readonly kind: "warp"; readonly sequence: string }
+  | { readonly kind: "desktop"; readonly title: string; readonly body: string };
+
+/**
+ * Decide how to notify for a lifecycle event. Under Warp it produces the OSC 777 sequence to emit
+ * (`warp://cli-agent` when the build supports structured notifications, otherwise a plain one);
+ * off Warp it asks for a native desktop notification; and it stays silent for unannounced events
+ * or under JAZZ_WARP_SILENT.
+ */
+export function planNotification(event: LifecycleEvent): NotificationPlan {
+  if (process.env["JAZZ_WARP_SILENT"] === "1") {
+    return { kind: "silent" };
+  }
+  const notification = notificationFor(event);
+  if (notification === undefined) {
+    return { kind: "silent" };
+  }
+  if (!isWarpTerminal()) {
+    return { kind: "desktop", title: notification.title, body: notification.body };
+  }
+  const warpEvent = warpEventName(event.event);
+  const payload =
+    warpEvent !== undefined && supportsStructuredWarp()
+      ? `warp://cli-agent;${structuredPayload(event, warpEvent)}`
+      : `${notification.title};${notification.body}`;
+  return { kind: "warp", sequence: `${OSC_NOTIFY_PREFIX}${payload}${OSC_TERMINATOR}` };
+}
+
+/**
+ * Write an OSC sequence to the controlling terminal so it binds to this tab. A host running a
+ * fullscreen TUI owns process.stdout and would swallow the sequence, so /dev/tty is the reliable
+ * path to Warp; fall back to stdout when there is no controlling terminal.
+ */
+function emitTerminalSequence(sequence: string): void {
   try {
-    process.stdout.write(`${OSC_NOTIFY_PREFIX}${title};${body}${OSC_TERMINATOR}`);
+    const tty = fs.openSync("/dev/tty", "w");
+    try {
+      fs.writeSync(tty, sequence);
+    } finally {
+      fs.closeSync(tty);
+    }
+    return;
+  } catch {
+    // No controlling terminal; fall through to stdout.
+  }
+  try {
+    process.stdout.write(sequence);
   } catch {
     // Best-effort: a closed or non-writable stdout must never surface to the run.
   }
@@ -141,22 +188,12 @@ function emitDesktopNotification(title: string, body: string): void {
 
 /** Deliver the notification for a lifecycle event by the best route for the current terminal. */
 export function notify(event: LifecycleEvent): void {
-  if (process.env["JAZZ_WARP_SILENT"] === "1") return;
-  const notification = notificationFor(event);
-  if (notification === undefined) return;
-
-  if (isWarpTerminal()) {
-    const warpEvent = warpEventName(event.event);
-    if (warpEvent !== undefined && supportsStructuredWarp()) {
-      emitTerminalNotification("warp://cli-agent", structuredPayload(event, warpEvent));
-      return;
-    }
-    // Warp without structured support: a plain notification, still bound to this tab via the stream.
-    emitTerminalNotification(notification.title, notification.body);
-    return;
+  const plan = planNotification(event);
+  if (plan.kind === "warp") {
+    emitTerminalSequence(plan.sequence);
+  } else if (plan.kind === "desktop") {
+    emitDesktopNotification(plan.title, plan.body);
   }
-
-  emitDesktopNotification(notification.title, notification.body);
 }
 
 const plugin: JazzPluginModule = {
