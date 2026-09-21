@@ -44,13 +44,6 @@ bun test
 bun run typecheck
 ```
 
-### The vendored SDK
-
-`types/jazz-plugin-sdk.ts` is a local copy of Jazz's types-only `@jazz/plugin-sdk` ABI, mapped in
-`tsconfig.json`. The plugin imports it with `import type` only — all runtime capabilities are passed
-to `register(api)` by the host — so the vendored copy is used at type-check time and never bundled.
-Replace it with the published package once `@jazz/plugin-sdk` is on npm.
-
 ## License
 
 MIT
