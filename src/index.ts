@@ -1,82 +1,115 @@
 /**
- * A Warp notification plugin for Jazz. When a task finishes or Jazz is waiting for you, it emits
- * a plain OSC 777 escape sequence for Warp tab notifications + macOS notification center.
+ * A Jazz notification plugin that raises normal native OS notifications when a task finishes or
+ * Jazz is waiting for the next message.
  *
- * Everything is best-effort and fire-and-forget: failures are swallowed, so nothing here can delay
- * or break a run. Set `JAZZ_WARP_SILENT=1` to suppress all notifications.
+ * This deliberately does not write terminal escape sequences, so Warp does not show its own
+ * in-terminal notification modal. Notifications are best-effort and fire-and-forget; failures are
+ * swallowed so nothing here can delay or break a run. Set `JAZZ_WARP_SILENT=1` to suppress them.
  */
 
-import * as fs from "node:fs";
+import { spawn } from "node:child_process";
 import type { JazzPluginModule, LifecycleEvent } from "@jazz/plugin-sdk";
 
 const MAX_BODY_CHARS = 200;
-
-const OSC_NOTIFY_PREFIX = "\u001b]777;notify;";
-const OSC_TERMINATOR = "\u0007";
 
 export interface Notification {
   readonly title: string;
   readonly body: string;
 }
 
-export function notificationFor(event: LifecycleEvent): Notification | undefined {
+/** Keep notification previews short enough for OS notification banners. */
+function preview(value: string): string {
+  return value.trim().slice(0, MAX_BODY_CHARS);
+}
+
+function summaryFrom(event: LifecycleEvent): string {
+  return typeof event.data?.["summary"] === "string" ? preview(event.data["summary"]) : "";
+}
+
+export function notificationFor(
+  event: LifecycleEvent,
+  previousResponse?: string,
+): Notification | undefined {
   switch (event.event) {
     case "run-complete": {
-      const summary =
-        typeof event.data?.["summary"] === "string" ? event.data["summary"].trim() : "";
+      const summary = summaryFrom(event);
       return {
         title: "Jazz — task complete",
-        body:
-          summary.length > 0 ? summary.slice(0, MAX_BODY_CHARS) : "The agent finished the task.",
+        body: summary.length > 0 ? summary : "The agent finished the task.",
       };
     }
     case "awaiting-input":
-      return { title: "Jazz — waiting for you", body: "The agent is ready for your next message." };
+      return {
+        title: "Jazz — waiting for you",
+        body:
+          previousResponse === undefined
+            ? "The agent is ready for your next message."
+            : preview(previousResponse),
+      };
     default:
       return undefined;
   }
 }
 
-function oscSequence(title: string, body: string): string {
-  return `${OSC_NOTIFY_PREFIX}${title};${body}${OSC_TERMINATOR}`;
-}
+export type NotificationPlan =
+  | { readonly kind: "silent" }
+  | { readonly kind: "desktop"; readonly title: string; readonly body: string };
 
-function isWarpTerminal(): boolean {
-  return process.env["TERM_PROGRAM"] === "WarpTerminal";
-}
-
-function emitTerminalSequence(sequence: string): void {
-  try {
-    const tty = fs.openSync("/dev/tty", "w");
-    try {
-      fs.writeSync(tty, sequence);
-    } finally {
-      fs.closeSync(tty);
-    }
-    return;
-  } catch {
-    // No controlling terminal; fall through to stdout.
-  }
-  try {
-    process.stdout.write(sequence);
-  } catch {
-    // Best-effort.
-  }
-}
-
-export function notify(event: LifecycleEvent, writeSequence?: (data: string) => void): void {
+export function planNotification(
+  event: LifecycleEvent,
+  previousResponse?: string,
+): NotificationPlan {
   if (process.env["JAZZ_WARP_SILENT"] === "1") {
-    return;
+    return { kind: "silent" };
   }
-  if (!isWarpTerminal()) {
-    return;
+  const notification = notificationFor(event, previousResponse);
+  return notification === undefined
+    ? { kind: "silent" }
+    : { kind: "desktop", title: notification.title, body: notification.body };
+}
+
+function emitDesktopNotification(title: string, body: string): void {
+  try {
+    if (process.platform === "darwin") {
+      const script = `display notification ${JSON.stringify(body)} with title ${JSON.stringify(title)}`;
+      const child = spawn("osascript", ["-e", script], { stdio: "ignore" });
+      child.on("error", () => {});
+      child.unref();
+    } else if (process.platform === "linux") {
+      const child = spawn("notify-send", [title, body], { stdio: "ignore" });
+      child.on("error", () => {});
+      child.unref();
+    }
+  } catch {
+    // Best-effort: a missing notifier or unsupported OS must never surface to the run.
   }
-  const notification = notificationFor(event);
-  if (notification === undefined) {
-    return;
+}
+
+const previousResponses = new Map<string, string>();
+
+function responseKey(event: LifecycleEvent): string {
+  return `${event.agentId}\u0000${event.conversationId}`;
+}
+
+function rememberResponse(event: LifecycleEvent): void {
+  if (event.event !== "run-complete") return;
+  const key = responseKey(event);
+  const summary = summaryFrom(event);
+  if (summary.length === 0) previousResponses.delete(key);
+  else previousResponses.set(key, summary);
+}
+
+/** Emit a native OS notification. The optional writer is retained for host ABI compatibility but intentionally unused. */
+export function notify(
+  event: LifecycleEvent,
+  _writeSequence?: (data: string) => void,
+): void {
+  const previousResponse = previousResponses.get(responseKey(event));
+  const plan = planNotification(event, previousResponse);
+  rememberResponse(event);
+  if (plan.kind === "desktop") {
+    emitDesktopNotification(plan.title, plan.body);
   }
-  const sequence = oscSequence(notification.title, notification.body);
-  (writeSequence ?? emitTerminalSequence)(sequence);
 }
 
 const plugin: JazzPluginModule = {
@@ -85,8 +118,8 @@ const plugin: JazzPluginModule = {
     for (const event of ["run-complete", "awaiting-input"] as const) {
       api.lifecycle.register({
         event,
-        handler: (received, context) => {
-          notify(received, context.writeTerminalSequence);
+        handler: (received) => {
+          notify(received);
           return Promise.resolve();
         },
       });

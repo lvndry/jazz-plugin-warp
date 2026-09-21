@@ -1,4 +1,4 @@
-/** Exercises the Warp plugin's notification logic, tab-bound OSC emission, and lifecycle wiring. */
+/** Exercises native notification planning, response previews, and lifecycle wiring. */
 
 import type {
   JazzPluginModule,
@@ -7,13 +7,7 @@ import type {
   PluginLifecycleRegistration,
 } from "@jazz/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import plugin, {
-  notificationFor,
-  planNotification,
-  structuredPayload,
-  supportsStructuredWarp,
-  warpEventName,
-} from "../src/index";
+import plugin, { notificationFor, notify, planNotification } from "../src/index";
 
 function event(overrides: Partial<LifecycleEvent> & Pick<LifecycleEvent, "event">): LifecycleEvent {
   return { agentId: "a", conversationId: "c", cwd: "/home/dev/project", ...overrides };
@@ -42,31 +36,13 @@ function register(): Map<string, PluginLifecycleRegistration> {
   return lifecycle;
 }
 
-const WARP_ENV = [
-  "TERM_PROGRAM",
-  "WARP_CLI_AGENT_PROTOCOL_VERSION",
-  "WARP_CLIENT_VERSION",
-  "JAZZ_WARP_SILENT",
-] as const;
-let savedEnv: Record<string, string | undefined> = {};
-
 beforeEach(() => {
-  savedEnv = Object.fromEntries(WARP_ENV.map((key) => [key, process.env[key]]));
-  for (const key of WARP_ENV) delete process.env[key];
+  delete process.env["JAZZ_WARP_SILENT"];
 });
 
 afterEach(() => {
-  for (const key of WARP_ENV) {
-    if (savedEnv[key] === undefined) delete process.env[key];
-    else process.env[key] = savedEnv[key];
-  }
+  delete process.env["JAZZ_WARP_SILENT"];
 });
-
-function underStructuredWarp(): void {
-  process.env["TERM_PROGRAM"] = "WarpTerminal";
-  process.env["WARP_CLI_AGENT_PROTOCOL_VERSION"] = "1";
-  process.env["WARP_CLIENT_VERSION"] = "v0.2026.09.01.00.00.stable_01";
-}
 
 describe("notificationFor", () => {
   it("builds a task-complete notification from the run summary", () => {
@@ -76,107 +52,59 @@ describe("notificationFor", () => {
     });
   });
 
-  it("falls back to a default body and announces awaiting-input", () => {
-    expect(notificationFor(event({ event: "run-complete" }))?.body).toBe("The agent finished the task.");
-    expect(notificationFor(event({ event: "awaiting-input" }))?.title).toBe("Jazz — waiting for you");
+  it("uses a previous response for awaiting-input and clips it", () => {
+    const response = "x".repeat(250);
+    expect(notificationFor(event({ event: "awaiting-input" }), response)).toEqual({
+      title: "Jazz — waiting for you",
+      body: response.slice(0, 200),
+    });
+    expect(notificationFor(event({ event: "awaiting-input" }))?.body).toBe(
+      "The agent is ready for your next message.",
+    );
+  });
+
+  it("ignores lifecycle events without notifications", () => {
     expect(notificationFor(event({ event: "session-start" }))).toBeUndefined();
   });
 });
 
-describe("warpEventName", () => {
-  it("maps lifecycle events to Warp event names", () => {
-    expect(warpEventName("run-complete")).toBe("stop");
-    expect(warpEventName("awaiting-input")).toBe("notification");
-    expect(warpEventName("session-start")).toBeUndefined();
-  });
-});
-
-describe("supportsStructuredWarp", () => {
-  it("requires an advertised protocol and a client version past the broken threshold", () => {
-    expect(supportsStructuredWarp()).toBe(false);
-    process.env["WARP_CLI_AGENT_PROTOCOL_VERSION"] = "1";
-    expect(supportsStructuredWarp()).toBe(false); // no client version
-    process.env["WARP_CLIENT_VERSION"] = "v0.2026.03.25.08.24.stable_05"; // exactly the broken one
-    expect(supportsStructuredWarp()).toBe(false);
-    process.env["WARP_CLIENT_VERSION"] = "v0.2026.09.01.00.00.stable_01";
-    expect(supportsStructuredWarp()).toBe(true);
-  });
-});
-
-describe("structuredPayload", () => {
-  it("carries session id, cwd, project, and the response summary", () => {
-    underStructuredWarp();
-    const payload = JSON.parse(
-      structuredPayload(
-        event({ event: "run-complete", conversationId: "sess-1", data: { summary: "done" } }),
-        "stop",
-      ),
-    ) as Record<string, unknown>;
-    expect(payload).toMatchObject({
-      v: 1,
-      agent: "jazz",
-      event: "stop",
-      session_id: "sess-1",
-      cwd: "/home/dev/project",
-      project: "project",
-      response: "done",
-    });
-  });
-});
-
 describe("planNotification", () => {
-  it("plans a tab-bound warp://cli-agent OSC sequence under structured Warp", () => {
-    underStructuredWarp();
-    const plan = planNotification(
-      event({ event: "run-complete", conversationId: "sess-9", data: { summary: "ok" } }),
-    );
-    expect(plan.kind).toBe("warp");
-    const sequence = plan.kind === "warp" ? plan.sequence : "";
-    expect(sequence.startsWith("\u001b]777;notify;warp://cli-agent;")).toBe(true);
-    expect(sequence.endsWith("\u0007")).toBe(true);
-    expect(sequence).toContain('"session_id":"sess-9"');
-  });
-
-  it("plans a plain OSC notification under Warp without structured support", () => {
+  it("always plans a native desktop notification, including under Warp", () => {
     process.env["TERM_PROGRAM"] = "WarpTerminal";
-    expect(planNotification(event({ event: "awaiting-input" }))).toEqual({
-      kind: "warp",
-      sequence:
-        "\u001b]777;notify;Jazz — waiting for you;The agent is ready for your next message.\u0007",
-    });
-  });
-
-  it("plans a desktop notification off Warp", () => {
-    const plan = planNotification(event({ event: "run-complete", data: { summary: "ok" } }));
-    expect(plan).toEqual({ kind: "desktop", title: "Jazz — task complete", body: "ok" });
-  });
-
-  it("stays silent under JAZZ_WARP_SILENT and for unannounced events", () => {
-    underStructuredWarp();
-    process.env["JAZZ_WARP_SILENT"] = "1";
     expect(planNotification(event({ event: "run-complete", data: { summary: "ok" } }))).toEqual({
-      kind: "silent",
+      kind: "desktop",
+      title: "Jazz — task complete",
+      body: "ok",
     });
+  });
+
+  it("stays silent when disabled or for unannounced events", () => {
+    process.env["JAZZ_WARP_SILENT"] = "1";
+    expect(planNotification(event({ event: "run-complete" }))).toEqual({ kind: "silent" });
     delete process.env["JAZZ_WARP_SILENT"];
     expect(planNotification(event({ event: "session-start" }))).toEqual({ kind: "silent" });
   });
 });
 
+describe("native notification wiring", () => {
+  it("uses the previous run response for the next awaiting-input event without writing to Warp", () => {
+    process.env["TERM_PROGRAM"] = "WarpTerminal";
+    const written: string[] = [];
+    const conversationId = "preview-session";
+
+    notify(
+      event({ event: "run-complete", conversationId, data: { summary: "The change is ready." } }),
+      (data) => written.push(data),
+    );
+    notify(event({ event: "awaiting-input", conversationId }), (data) => written.push(data));
+
+    expect(written).toEqual([]);
+  });
+});
+
 describe("plugin registration", () => {
-  it("subscribes to run-complete and awaiting-input, and routes the OSC to the host writer", async () => {
-    underStructuredWarp();
+  it("subscribes to run-complete and awaiting-input", () => {
     const lifecycle = register();
     expect([...lifecycle.keys()].sort()).toEqual(["awaiting-input", "run-complete"]);
-    const written: string[] = [];
-    await expect(
-      lifecycle
-        .get("run-complete")!
-        .handler(event({ event: "run-complete", conversationId: "s1", data: { summary: "done" } }), {
-          signal: new AbortController().signal,
-          writeTerminalSequence: (data) => written.push(data),
-        }),
-    ).resolves.toBeUndefined();
-    expect(written).toHaveLength(1);
-    expect(written[0]?.startsWith("\u001b]777;notify;warp://cli-agent;")).toBe(true);
   });
 });

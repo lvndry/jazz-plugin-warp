@@ -1,29 +1,20 @@
 # jazz-plugin-warp
 
-A [Jazz](https://github.com/lvndry/jazz) plugin that raises a notification — bound to the exact Warp
-tab the agent is running in — when it finishes a task or is waiting for your next message. It rides
-Jazz's lifecycle-hook system, the same shape as
-[`warpdotdev/claude-code-warp`](https://github.com/warpdotdev/claude-code-warp).
+A [Jazz](https://github.com/lvndry/jazz) plugin that raises normal native OS notifications when a
+task finishes or is waiting for your next message. It rides Jazz's lifecycle-hook system.
 
 ## What it does
 
 The plugin subscribes to two lifecycle events:
 
 - **`run-complete`** — "Jazz — task complete", with the response summary as the body.
-- **`awaiting-input`** — "Jazz — waiting for you".
+- **`awaiting-input`** — "Jazz — waiting for you", with the preceding response excerpt as the body.
+  The excerpt is capped at 200 characters; the generic waiting message is used when no response is
+  available.
 
-**Under Warp**, it emits an OSC 777 escape sequence — `\e]777;notify;warp://cli-agent;<json>\a` —
-to the terminal. Because the sequence travels down the running tab's byte stream, Warp binds the
-notification to that exact tab, and the JSON payload carries the session id, working directory, and
-project so Warp can drive its session UI. It negotiates the `warp://cli-agent` protocol version and
-falls back to a plain OSC notification on older Warp builds.
-
-It sends the sequence through the host's `writeTerminalSequence` (the lifecycle handler context), so
-it reaches the terminal even though Jazz's fullscreen UI owns stdout; on an older Jazz that doesn't
-provide it, the plugin writes the controlling terminal (`/dev/tty`) itself.
-
-**Off Warp**, it falls back to a native desktop notification (`osascript` on macOS, `notify-send` on
-Linux).
+The plugin uses the normal OS notification center (`osascript` on macOS, `notify-send` on Linux).
+It never writes terminal escape sequences, so Warp does not show a separate in-terminal notification
+modal.
 
 Everything is best-effort and fire-and-forget: failures are swallowed, so nothing here can delay or
 break a run.
