@@ -1,20 +1,28 @@
 # jazz-plugin-warp
 
-A [Jazz](https://github.com/lvndry/jazz) plugin that raises a native desktop notification when the
-agent finishes a task or is waiting for your next message. It rides Jazz's lifecycle-hook system —
-the same shape as [`warpdotdev/claude-code-warp`](https://github.com/warpdotdev/claude-code-warp),
-which rides Claude Code's hook system.
+A [Jazz](https://github.com/lvndry/jazz) plugin that raises a notification — bound to the exact Warp
+tab the agent is running in — when it finishes a task or is waiting for your next message. It rides
+Jazz's lifecycle-hook system, the same shape as
+[`warpdotdev/claude-code-warp`](https://github.com/warpdotdev/claude-code-warp).
 
 ## What it does
 
-The plugin subscribes to two lifecycle events and shells out to the OS notifier:
+The plugin subscribes to two lifecycle events:
 
 - **`run-complete`** — "Jazz — task complete", with the response summary as the body.
 - **`awaiting-input`** — "Jazz — waiting for you".
 
-Delivery is best-effort: it is platform-guarded (`osascript` on macOS, `notify-send` on Linux) and
-any failure is swallowed. Lifecycle handlers are fire-and-forget, so nothing here can delay or break
-a run.
+**Under Warp**, it emits an OSC 777 escape sequence — `\e]777;notify;warp://cli-agent;<json>\a` —
+to the terminal's own stream. Because the sequence travels down the running tab's byte stream, Warp
+binds the notification to that exact tab, and the JSON payload carries the session id, working
+directory, and project so Warp can drive its session UI. It negotiates the `warp://cli-agent`
+protocol version and falls back to a plain OSC notification on older Warp builds.
+
+**Off Warp**, it falls back to a native desktop notification (`osascript` on macOS, `notify-send` on
+Linux).
+
+Everything is best-effort and fire-and-forget: failures are swallowed, so nothing here can delay or
+break a run.
 
 ## Configuration
 
