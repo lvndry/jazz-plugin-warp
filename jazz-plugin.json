@@ -12,6 +12,7 @@
   "personas": [],
   "skills": [],
   "lifecycleHooks": ["run-complete", "awaiting-input"],
+  "claimsNotifications": true,
   "network": { "destinations": [] },
   "dataSent": [],
   "secrets": []
