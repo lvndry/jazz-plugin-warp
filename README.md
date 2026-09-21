@@ -12,9 +12,10 @@ The plugin subscribes to two lifecycle events:
   The excerpt is capped at 200 characters; the generic waiting message is used when no response is
   available.
 
-The plugin uses the normal OS notification center (`osascript` on macOS, `notify-send` on Linux).
-It never writes terminal escape sequences, so Warp does not show a separate in-terminal notification
-modal.
+The plugin uses the normal OS notification center via `terminal-notifier` on macOS and `notify-send`
+on Linux. On macOS, install the helper once with `brew install terminal-notifier`. It never writes
+terminal escape sequences, so Warp does not show a separate in-terminal notification modal. When a
+notification is clicked from Warp, it activates Warp rather than opening Script Editor.
 
 Everything is best-effort and fire-and-forget: failures are swallowed, so nothing here can delay or
 break a run.

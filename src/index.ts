@@ -71,8 +71,11 @@ export function planNotification(
 function emitDesktopNotification(title: string, body: string): void {
   try {
     if (process.platform === "darwin") {
-      const script = `display notification ${JSON.stringify(body)} with title ${JSON.stringify(title)}`;
-      const child = spawn("osascript", ["-e", script], { stdio: "ignore" });
+      const args = ["-title", title, "-message", body];
+      if (process.env["TERM_PROGRAM"] === "WarpTerminal") {
+        args.push("-activate", "dev.warp.Warp-Stable");
+      }
+      const child = spawn("terminal-notifier", args, { stdio: "ignore" });
       child.on("error", () => {});
       child.unref();
     } else if (process.platform === "linux") {
