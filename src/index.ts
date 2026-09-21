@@ -1,10 +1,11 @@
 /**
- * A Warp notification plugin for Jazz. When a task finishes or Jazz is waiting for you, it raises a
- * notification bound to the Warp tab the agent is running in.
+ * A Warp notification plugin for Jazz. When a task finishes or Jazz is waiting for you, it raises
+ * notifications through two channels:
  *
- * Under Warp it emits a structured OSC 777 `warp://cli-agent` escape sequence so Warp delivers
- * both in-app tab notifications and macOS notification center entries. Off Warp it falls back to
- * a native OS notification (osascript / notify-send).
+ * 1. A plain OSC 777 escape sequence for in-Warp tab notifications
+ * 2. An osascript/notify-send call for macOS/Linux desktop notifications
+ *
+ * Off Warp it falls back to desktop notifications only.
  *
  * Everything is best-effort and fire-and-forget: failures are swallowed, so nothing here can delay
  * or break a run. Set `JAZZ_WARP_SILENT=1` to suppress all notifications.
@@ -12,7 +13,7 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-import type { JazzPluginModule, LifecycleEvent, LifecycleEventId } from "@jazz/plugin-sdk";
+import type { JazzPluginModule, LifecycleEvent } from "@jazz/plugin-sdk";
 
 export interface Notification {
   readonly title: string;
@@ -20,8 +21,6 @@ export interface Notification {
 }
 
 const MAX_BODY_CHARS = 200;
-
-const PLUGIN_PROTOCOL_VERSION = 1;
 
 const OSC_NOTIFY_PREFIX = "\u001b]777;notify;";
 const OSC_TERMINATOR = "\u0007";
@@ -44,48 +43,17 @@ export function notificationFor(event: LifecycleEvent): Notification | undefined
   }
 }
 
-export function warpEventName(event: LifecycleEventId): "stop" | "notification" | undefined {
-  switch (event) {
-    case "run-complete":
-      return "stop";
-    case "awaiting-input":
-      return "notification";
-    default:
-      return undefined;
-  }
-}
-
 function isWarpTerminal(): boolean {
   return process.env["TERM_PROGRAM"] === "WarpTerminal";
 }
 
-function negotiatedProtocolVersion(): number {
-  const advertised = Number(process.env["WARP_CLI_AGENT_PROTOCOL_VERSION"]);
-  return Number.isInteger(advertised) && advertised < PLUGIN_PROTOCOL_VERSION
-    ? advertised
-    : PLUGIN_PROTOCOL_VERSION;
-}
-
-export function structuredPayload(event: LifecycleEvent, warpEvent: "stop" | "notification"): string {
-  const cwd = event.cwd;
-  const summary = typeof event.data?.["summary"] === "string" ? event.data["summary"].trim() : "";
-  const payload: Record<string, unknown> = {
-    v: negotiatedProtocolVersion(),
-    agent: "droid",
-    event: warpEvent,
-    session_id: event.conversationId,
-    cwd,
-    project: cwd.split("/").filter((segment) => segment.length > 0).pop() ?? "",
-  };
-  if (warpEvent === "stop" && summary.length > 0) {
-    payload["response"] = summary.slice(0, MAX_BODY_CHARS);
-  }
-  return JSON.stringify(payload);
+function plainOscSequence(title: string, body: string): string {
+  return `${OSC_NOTIFY_PREFIX}${title};${body}${OSC_TERMINATOR}`;
 }
 
 export type NotificationPlan =
   | { readonly kind: "silent" }
-  | { readonly kind: "warp"; readonly sequence: string }
+  | { readonly kind: "warp-dual"; readonly sequence: string; readonly title: string; readonly body: string }
   | { readonly kind: "desktop"; readonly title: string; readonly body: string };
 
 export function planNotification(event: LifecycleEvent): NotificationPlan {
@@ -99,12 +67,12 @@ export function planNotification(event: LifecycleEvent): NotificationPlan {
   if (!isWarpTerminal()) {
     return { kind: "desktop", title: notification.title, body: notification.body };
   }
-  const warpEvent = warpEventName(event.event);
-  const payload =
-    warpEvent !== undefined
-      ? `warp://cli-agent;${structuredPayload(event, warpEvent)}`
-      : `${notification.title};${notification.body}`;
-  return { kind: "warp", sequence: `${OSC_NOTIFY_PREFIX}${payload}${OSC_TERMINATOR}` };
+  return {
+    kind: "warp-dual",
+    sequence: plainOscSequence(notification.title, notification.body),
+    title: notification.title,
+    body: notification.body,
+  };
 }
 
 function emitTerminalSequence(sequence: string): void {
@@ -122,7 +90,7 @@ function emitTerminalSequence(sequence: string): void {
   try {
     process.stdout.write(sequence);
   } catch {
-    // Best-effort: a closed or non-writable stdout must never surface to the run.
+    // Best-effort.
   }
 }
 
@@ -135,14 +103,15 @@ function emitDesktopNotification(title: string, body: string): void {
       spawn("notify-send", [title, body], { stdio: "ignore" }).unref();
     }
   } catch {
-    // Best-effort: a missing notifier binary must never surface to the run.
+    // Best-effort.
   }
 }
 
 export function notify(event: LifecycleEvent, writeSequence?: (data: string) => void): void {
   const plan = planNotification(event);
-  if (plan.kind === "warp") {
+  if (plan.kind === "warp-dual") {
     (writeSequence ?? emitTerminalSequence)(plan.sequence);
+    emitDesktopNotification(plan.title, plan.body);
   } else if (plan.kind === "desktop") {
     emitDesktopNotification(plan.title, plan.body);
   }
