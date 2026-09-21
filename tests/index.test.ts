@@ -1,4 +1,4 @@
-/** Exercises native notification planning, response previews, and lifecycle wiring. */
+/** Exercises generic Warp OSC notification planning, response previews, and lifecycle wiring. */
 
 import type {
   JazzPluginModule,
@@ -37,10 +37,12 @@ function register(): Map<string, PluginLifecycleRegistration> {
 }
 
 beforeEach(() => {
+  process.env["TERM_PROGRAM"] = "WarpTerminal";
   delete process.env["JAZZ_WARP_SILENT"];
 });
 
 afterEach(() => {
+  delete process.env["TERM_PROGRAM"];
   delete process.env["JAZZ_WARP_SILENT"];
 });
 
@@ -69,26 +71,25 @@ describe("notificationFor", () => {
 });
 
 describe("planNotification", () => {
-  it("always plans a native desktop notification, including under Warp", () => {
-    process.env["TERM_PROGRAM"] = "WarpTerminal";
-    expect(planNotification(event({ event: "run-complete", data: { summary: "ok" } }))).toEqual({
-      kind: "desktop",
-      title: "Jazz — task complete",
-      body: "ok",
+  it("plans a generic OSC 777 notification under Warp", () => {
+    const plan = planNotification(event({ event: "run-complete", data: { summary: "ok" } }));
+    expect(plan).toEqual({
+      kind: "warp",
+      sequence: "\u001b]777;notify;Jazz — task complete;ok\u0007",
     });
   });
 
-  it("stays silent when disabled or for unannounced events", () => {
+  it("does not emit outside Warp or when disabled", () => {
+    delete process.env["TERM_PROGRAM"];
+    expect(planNotification(event({ event: "run-complete" }))).toEqual({ kind: "silent" });
+    process.env["TERM_PROGRAM"] = "WarpTerminal";
     process.env["JAZZ_WARP_SILENT"] = "1";
     expect(planNotification(event({ event: "run-complete" }))).toEqual({ kind: "silent" });
-    delete process.env["JAZZ_WARP_SILENT"];
-    expect(planNotification(event({ event: "session-start" }))).toEqual({ kind: "silent" });
   });
 });
 
-describe("native notification wiring", () => {
-  it("uses the previous run response for the next awaiting-input event without writing to Warp", () => {
-    process.env["TERM_PROGRAM"] = "WarpTerminal";
+describe("Warp notification wiring", () => {
+  it("uses the preceding response for awaiting-input and writes only the Warp sequence", () => {
     const written: string[] = [];
     const conversationId = "preview-session";
 
@@ -98,13 +99,25 @@ describe("native notification wiring", () => {
     );
     notify(event({ event: "awaiting-input", conversationId }), (data) => written.push(data));
 
-    expect(written).toEqual([]);
+    expect(written).toEqual([
+      "\u001b]777;notify;Jazz — task complete;The change is ready.\u0007",
+      "\u001b]777;notify;Jazz — waiting for you;The change is ready.\u0007",
+    ]);
   });
 });
 
 describe("plugin registration", () => {
-  it("subscribes to run-complete and awaiting-input", () => {
+  it("subscribes to run-complete and awaiting-input and routes sequences to Warp", async () => {
     const lifecycle = register();
     expect([...lifecycle.keys()].sort()).toEqual(["awaiting-input", "run-complete"]);
+    const written: string[] = [];
+    await lifecycle.get("run-complete")!.handler(
+      event({ event: "run-complete", data: { summary: "done" } }),
+      {
+        signal: new AbortController().signal,
+        writeTerminalSequence: (data) => written.push(data),
+      },
+    );
+    expect(written).toEqual(["\u001b]777;notify;Jazz — task complete;done\u0007"]);
   });
 });

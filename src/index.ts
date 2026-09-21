@@ -1,25 +1,26 @@
 /**
- * A Jazz notification plugin that raises normal native OS notifications when a task finishes or
- * Jazz is waiting for the next message.
+ * A Warp notification plugin for Jazz. It uses Warp's documented OSC 777 notification format so
+ * Warp owns the notification and can deliver it through its normal desktop notification settings.
  *
- * This deliberately does not write terminal escape sequences, so Warp does not show its own
- * in-terminal notification modal. Notifications are best-effort and fire-and-forget; failures are
- * swallowed so nothing here can delay or break a run. Set `JAZZ_WARP_SILENT=1` to suppress them.
+ * This intentionally uses the generic title/body form rather than the allowlisted
+ * `warp://cli-agent` rich-agent protocol: Jazz is not pretending to be another registered agent.
+ * Everything is best-effort and fire-and-forget. Set `JAZZ_WARP_SILENT=1` to suppress notifications.
  */
 
-import { spawn } from "node:child_process";
 import type { JazzPluginModule, LifecycleEvent } from "@jazz/plugin-sdk";
 
 const MAX_BODY_CHARS = 200;
+const OSC_NOTIFY_PREFIX = "\u001b]777;notify;";
+const OSC_TERMINATOR = "\u0007";
 
 export interface Notification {
   readonly title: string;
   readonly body: string;
 }
 
-/** Keep notification previews short enough for OS notification banners. */
+/** Keep previews short and safe for OSC's title/body separators. */
 function preview(value: string): string {
-  return value.trim().slice(0, MAX_BODY_CHARS);
+  return value.replace(/\s+/g, " ").replaceAll(";", ",").trim().slice(0, MAX_BODY_CHARS);
 }
 
 function summaryFrom(event: LifecycleEvent): string {
@@ -51,41 +52,29 @@ export function notificationFor(
   }
 }
 
+function isWarpTerminal(): boolean {
+  return process.env["TERM_PROGRAM"] === "WarpTerminal";
+}
+
+function oscSequence(notification: Notification): string {
+  return `${OSC_NOTIFY_PREFIX}${notification.title};${notification.body}${OSC_TERMINATOR}`;
+}
+
 export type NotificationPlan =
   | { readonly kind: "silent" }
-  | { readonly kind: "desktop"; readonly title: string; readonly body: string };
+  | { readonly kind: "warp"; readonly sequence: string };
 
 export function planNotification(
   event: LifecycleEvent,
   previousResponse?: string,
 ): NotificationPlan {
-  if (process.env["JAZZ_WARP_SILENT"] === "1") {
+  if (process.env["JAZZ_WARP_SILENT"] === "1" || !isWarpTerminal()) {
     return { kind: "silent" };
   }
   const notification = notificationFor(event, previousResponse);
   return notification === undefined
     ? { kind: "silent" }
-    : { kind: "desktop", title: notification.title, body: notification.body };
-}
-
-function emitDesktopNotification(title: string, body: string): void {
-  try {
-    if (process.platform === "darwin") {
-      const args = ["-title", title, "-message", body];
-      if (process.env["TERM_PROGRAM"] === "WarpTerminal") {
-        args.push("-activate", "dev.warp.Warp-Stable");
-      }
-      const child = spawn("terminal-notifier", args, { stdio: "ignore" });
-      child.on("error", () => {});
-      child.unref();
-    } else if (process.platform === "linux") {
-      const child = spawn("notify-send", [title, body], { stdio: "ignore" });
-      child.on("error", () => {});
-      child.unref();
-    }
-  } catch {
-    // Best-effort: a missing notifier or unsupported OS must never surface to the run.
-  }
+    : { kind: "warp", sequence: oscSequence(notification) };
 }
 
 const previousResponses = new Map<string, string>();
@@ -102,16 +91,15 @@ function rememberResponse(event: LifecycleEvent): void {
   else previousResponses.set(key, summary);
 }
 
-/** Emit a native OS notification. The optional writer is retained for host ABI compatibility but intentionally unused. */
 export function notify(
   event: LifecycleEvent,
-  _writeSequence?: (data: string) => void,
+  writeSequence?: (data: string) => void,
 ): void {
   const previousResponse = previousResponses.get(responseKey(event));
   const plan = planNotification(event, previousResponse);
   rememberResponse(event);
-  if (plan.kind === "desktop") {
-    emitDesktopNotification(plan.title, plan.body);
+  if (plan.kind === "warp") {
+    writeSequence?.(plan.sequence);
   }
 }
 
@@ -121,8 +109,8 @@ const plugin: JazzPluginModule = {
     for (const event of ["run-complete", "awaiting-input"] as const) {
       api.lifecycle.register({
         event,
-        handler: (received) => {
-          notify(received);
+        handler: (received, context) => {
+          notify(received, context.writeTerminalSequence);
           return Promise.resolve();
         },
       });

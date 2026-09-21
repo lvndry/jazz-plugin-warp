@@ -12,10 +12,13 @@ The plugin subscribes to two lifecycle events:
   The excerpt is capped at 200 characters; the generic waiting message is used when no response is
   available.
 
-The plugin uses the normal OS notification center via `terminal-notifier` on macOS and `notify-send`
-on Linux. On macOS, install the helper once with `brew install terminal-notifier`. It never writes
-terminal escape sequences, so Warp does not show a separate in-terminal notification modal. When a
-notification is clicked from Warp, it activates Warp rather than opening Script Editor.
+The plugin uses Warp's documented generic OSC 777 notification format. Warp receives the title and
+body, then delivers the notification through Warp's own desktop-notification settings on macOS,
+Linux, or Windows. No AppleScript, `terminal-notifier`, or fake allowlisted agent identity is used.
+
+This is the generic Warp notification path, not the richer `warp://cli-agent` session protocol. The
+latter is reserved for agents Warp explicitly recognizes; Jazz uses the generic path until Warp adds
+first-class Jazz support.
 
 Everything is best-effort and fire-and-forget: failures are swallowed, so nothing here can delay or
 break a run.
