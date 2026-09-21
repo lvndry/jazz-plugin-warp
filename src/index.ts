@@ -1,11 +1,8 @@
 /**
  * A Warp notification plugin for Jazz. When a task finishes or Jazz is waiting for you, it raises
- * notifications through two channels:
+ * a plain OSC 777 escape sequence for Warp tab notifications + macOS notification center.
  *
- * 1. A plain OSC 777 escape sequence for in-Warp tab notifications
- * 2. An osascript/notify-send call for macOS/Linux desktop notifications
- *
- * Off Warp it falls back to desktop notifications only.
+ * Off Warp it falls back to osascript/notify-send desktop notifications.
  *
  * Everything is best-effort and fire-and-forget: failures are swallowed, so nothing here can delay
  * or break a run. Set `JAZZ_WARP_SILENT=1` to suppress all notifications.
@@ -53,7 +50,7 @@ function plainOscSequence(title: string, body: string): string {
 
 export type NotificationPlan =
   | { readonly kind: "silent" }
-  | { readonly kind: "warp-dual"; readonly sequence: string; readonly title: string; readonly body: string }
+  | { readonly kind: "warp"; readonly sequence: string }
   | { readonly kind: "desktop"; readonly title: string; readonly body: string };
 
 export function planNotification(event: LifecycleEvent): NotificationPlan {
@@ -68,10 +65,8 @@ export function planNotification(event: LifecycleEvent): NotificationPlan {
     return { kind: "desktop", title: notification.title, body: notification.body };
   }
   return {
-    kind: "warp-dual",
+    kind: "warp",
     sequence: plainOscSequence(notification.title, notification.body),
-    title: notification.title,
-    body: notification.body,
   };
 }
 
@@ -109,9 +104,8 @@ function emitDesktopNotification(title: string, body: string): void {
 
 export function notify(event: LifecycleEvent, writeSequence?: (data: string) => void): void {
   const plan = planNotification(event);
-  if (plan.kind === "warp-dual") {
+  if (plan.kind === "warp") {
     (writeSequence ?? emitTerminalSequence)(plan.sequence);
-    emitDesktopNotification(plan.title, plan.body);
   } else if (plan.kind === "desktop") {
     emitDesktopNotification(plan.title, plan.body);
   }
