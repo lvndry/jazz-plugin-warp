@@ -163,16 +163,20 @@ describe("planNotification", () => {
 });
 
 describe("plugin registration", () => {
-  it("subscribes to run-complete and awaiting-input, and handlers resolve", async () => {
-    process.env["JAZZ_WARP_SILENT"] = "1";
+  it("subscribes to run-complete and awaiting-input, and routes the OSC to the host writer", async () => {
+    underStructuredWarp();
     const lifecycle = register();
     expect([...lifecycle.keys()].sort()).toEqual(["awaiting-input", "run-complete"]);
+    const written: string[] = [];
     await expect(
       lifecycle
         .get("run-complete")!
-        .handler(event({ event: "run-complete", data: { summary: "done" } }), {
+        .handler(event({ event: "run-complete", conversationId: "s1", data: { summary: "done" } }), {
           signal: new AbortController().signal,
+          writeTerminalSequence: (data) => written.push(data),
         }),
     ).resolves.toBeUndefined();
+    expect(written).toHaveLength(1);
+    expect(written[0]?.startsWith("\u001b]777;notify;warp://cli-agent;")).toBe(true);
   });
 });

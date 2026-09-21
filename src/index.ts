@@ -186,11 +186,16 @@ function emitDesktopNotification(title: string, body: string): void {
   }
 }
 
-/** Deliver the notification for a lifecycle event by the best route for the current terminal. */
-export function notify(event: LifecycleEvent): void {
+/**
+ * Deliver the notification for a lifecycle event by the best route for the current terminal. Under
+ * Warp it prefers the host's `writeTerminalSequence` (which targets the controlling terminal even
+ * behind a fullscreen TUI); when the host does not provide one — an older Jazz — it writes the
+ * controlling terminal itself.
+ */
+export function notify(event: LifecycleEvent, writeSequence?: (data: string) => void): void {
   const plan = planNotification(event);
   if (plan.kind === "warp") {
-    emitTerminalSequence(plan.sequence);
+    (writeSequence ?? emitTerminalSequence)(plan.sequence);
   } else if (plan.kind === "desktop") {
     emitDesktopNotification(plan.title, plan.body);
   }
@@ -202,8 +207,8 @@ const plugin: JazzPluginModule = {
     for (const event of ["run-complete", "awaiting-input"] as const) {
       api.lifecycle.register({
         event,
-        handler: (received) => {
-          notify(received);
+        handler: (received, context) => {
+          notify(received, context.writeTerminalSequence);
           return Promise.resolve();
         },
       });

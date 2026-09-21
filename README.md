@@ -13,10 +13,14 @@ The plugin subscribes to two lifecycle events:
 - **`awaiting-input`** — "Jazz — waiting for you".
 
 **Under Warp**, it emits an OSC 777 escape sequence — `\e]777;notify;warp://cli-agent;<json>\a` —
-to the terminal's own stream. Because the sequence travels down the running tab's byte stream, Warp
-binds the notification to that exact tab, and the JSON payload carries the session id, working
-directory, and project so Warp can drive its session UI. It negotiates the `warp://cli-agent`
-protocol version and falls back to a plain OSC notification on older Warp builds.
+to the terminal. Because the sequence travels down the running tab's byte stream, Warp binds the
+notification to that exact tab, and the JSON payload carries the session id, working directory, and
+project so Warp can drive its session UI. It negotiates the `warp://cli-agent` protocol version and
+falls back to a plain OSC notification on older Warp builds.
+
+It sends the sequence through the host's `writeTerminalSequence` (the lifecycle handler context), so
+it reaches the terminal even though Jazz's fullscreen UI owns stdout; on an older Jazz that doesn't
+provide it, the plugin writes the controlling terminal (`/dev/tty`) itself.
 
 **Off Warp**, it falls back to a native desktop notification (`osascript` on macOS, `notify-send` on
 Linux).
