@@ -1,7 +1,7 @@
 {
   "name": "jazz-plugin-warp",
   "version": "0.1.0",
-  "description": "A Jazz plugin that raises native desktop notifications on lifecycle events (task complete, awaiting input).",
+  "description": "A Jazz plugin that raises native desktop notifications on lifecycle events (task complete, tool approval, awaiting input).",
   "license": "MIT",
   "type": "module",
   "packageManager": "bun@1.4.2",

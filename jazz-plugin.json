@@ -11,7 +11,7 @@
   "commands": [],
   "personas": [],
   "skills": [],
-  "lifecycleHooks": ["run-complete", "awaiting-input"],
+  "lifecycleHooks": ["run-complete", "awaiting-input", "permission-request"],
   "claimsNotifications": true,
   "network": { "destinations": [] },
   "dataSent": [],

@@ -1,13 +1,16 @@
 # jazz-plugin-warp
 
 A [Jazz](https://github.com/lvndry/jazz) plugin that raises normal native OS notifications when a
-task finishes or is waiting for your next message. It rides Jazz's lifecycle-hook system.
+task finishes, needs tool approval, or is waiting for your next message. It rides Jazz's lifecycle-hook system.
 
 ## What it does
 
-The plugin subscribes to two lifecycle events:
+The plugin subscribes to three lifecycle events:
 
 - **`run-complete`** — "Jazz — task complete", with the response summary as the body.
+- **`permission-request`** — "Jazz — approval needed", naming the tool awaiting approval.
+  A generic approval message is used when no tool name is available. Requires a Jazz host that
+  supports the `permission-request` lifecycle hook.
 - **`awaiting-input`** — "Jazz — waiting for you", with the preceding response excerpt as the body.
   The excerpt is capped at 200 characters; the generic waiting message is used when no response is
   available.
@@ -41,7 +44,7 @@ jazz plugin enable com.jazz.plugins.warp --agent <id-or-name>   # grant egress c
 Pin a version with `jazz plugin add lvndry/jazz-plugin-warp@v0.1.0`. `jazz plugin inspect
 com.jazz.plugins.warp` shows the digest, declarations, grants, and enablement. The manifest is
 `jazz-plugin.json` (id `com.jazz.plugins.warp`, entry `src/index.ts`); this plugin declares no
-network destinations, tools, or secrets — only the two lifecycle hooks.
+network destinations, tools, or secrets — only the three lifecycle hooks.
 
 ## Develop
 
