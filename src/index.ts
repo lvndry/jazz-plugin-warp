@@ -20,7 +20,12 @@ export interface Notification {
 
 /** Keep previews short and safe for OSC's title/body separators. */
 function preview(value: string): string {
-  return value.replace(/\s+/g, " ").replaceAll(";", ",").trim().slice(0, MAX_BODY_CHARS);
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
+    .replaceAll(";", ",")
+    .trim()
+    .slice(0, MAX_BODY_CHARS);
 }
 
 function summaryFrom(event: LifecycleEvent): string {
@@ -32,6 +37,15 @@ export function notificationFor(
   previousResponse?: string,
 ): Notification | undefined {
   switch (event.event) {
+    case "permission-request": {
+      const tool = typeof event.data?.["tool"] === "string" ? preview(event.data["tool"]) : "";
+      return {
+        title: "Jazz — approval needed",
+        body: tool.length > 0
+          ? preview(`Approve ${tool} to continue.`)
+          : "A tool needs your approval to continue.",
+      };
+    }
     case "run-complete": {
       const summary = summaryFrom(event);
       return {
@@ -106,7 +120,7 @@ export function notify(
 const plugin: JazzPluginModule = {
   apiVersion: 1,
   register(api) {
-    for (const event of ["run-complete", "awaiting-input"] as const) {
+    for (const event of ["run-complete", "awaiting-input", "permission-request"] as const) {
       api.lifecycle.register({
         event,
         handler: (received, context) => {
